@@ -40,6 +40,20 @@ CONFIGS = [
     ("CCE+compile",      True),
 ]
 
+# Auto-detect mlx variant at module load time
+_MLX_HAS_CCE = None
+
+def _check_mlx_cce():
+    """Check if mlx-cce is installed (has mx.fast.cce_loss)"""
+    global _MLX_HAS_CCE
+    if _MLX_HAS_CCE is None:
+        try:
+            import mlx.core as mx
+            _MLX_HAS_CCE = hasattr(mx, "fast") and hasattr(mx.fast, "cce_loss")
+        except ImportError:
+            _MLX_HAS_CCE = False
+    return _MLX_HAS_CCE
+
 BATCH_SIZE = 8
 SEQ_LEN = 1024
 WARMUP_STEPS = 5
@@ -83,26 +97,10 @@ def run_worker(model_name, display_name, use_lora, use_cce, wandb_project=None):
         )
         model = get_peft_model(model, lora_config)
 
-    # Store use_cce flag on the model so it can be passed during forward
-    model._use_cce = use_cce
-
-    # Check if mx.fast.cce_loss is available (for mlx-cce)
-    # If available, we need to explicitly disable for baseline
-    import mlx.core as mx
-    has_fast_cce = hasattr(mx, "fast") and hasattr(mx.fast, "cce_loss")
-
-    # If mx.fast.cce_loss exists, CCE is auto-enabled by default
-    # For baseline, we need to explicitly disable it
-    if has_fast_cce and not use_cce:
-        # Force disable CCE for baseline by passing explicit flag
-        use_cce_for_call = False
-    else:
-        use_cce_for_call = use_cce
-
-    # Wrap __call__ to inject use_cce
+    # Wrap __call__ to inject use_cce flag
     _original_call = model.__call__
     def _call_with_cce(*args, **kwargs):
-        kwargs["use_cce"] = use_cce_for_call
+        kwargs["use_cce"] = use_cce
         return _original_call(*args, **kwargs)
     model.__call__ = _call_with_cce
 
@@ -253,30 +251,26 @@ def run_subprocess(cmd):
 
 
 def main(args):
-    # Auto-detect mlx variant and set configs accordingly
-    try:
-        import mlx.core as mx
-        has_fast_cce = hasattr(mx, "fast") and hasattr(mx.fast, "cce_loss")
-    except ImportError:
-        has_fast_cce = False
+    # Auto-detect mlx variant - run only what makes sense
+    has_fast_cce = _check_mlx_cce()
     
-    global CONFIGS
     if has_fast_cce:
-        # mlx-cce installed: CCE is always on by default, only run CCE config
-        print("Detected: mlx-cce installed (CCE enabled by default)")
-        CONFIGS = [("CCE+compile", True)]
+        # mlx-cce installed: only run CCE config (baseline uses CCE anyway due to auto-default)
+        print("Detected: mlx-cce installed (CCE auto-enabled)")
+        configs_to_run = [("CCE+compile", True)]
     else:
-        # Regular mlx: run baseline (CCE won't be available)
+        # Regular mlx: only run baseline (CCE not available)
         print("Detected: regular mlx (CCE not available)")
-        CONFIGS = [("Baseline+compile", False)]
+        configs_to_run = [("Baseline+compile", False)]
     
+    # Run the benchmark
     print("=" * 80)
-    print("Unsloth MLX Benchmark: Baseline+compile vs CCE+compile")
+    print("Unsloth MLX Benchmark")
     print("  Gradient Checkpointing: ON | Compile: ON | Isolation: subprocess")
     print("=" * 80)
     print(f"Batch: {BATCH_SIZE}, Seq: {SEQ_LEN}, Warmup: {WARMUP_STEPS}, Measure: {MEASURE_STEPS}")
     print(f"Optimizer: Adafactor (lr={LR})")
-    print(f"Models: {len(MODELS)}, Configs: {len(CONFIGS)}")
+    print(f"Models: {len(MODELS)}, Configs: {len(configs_to_run)}")
     print("=" * 80)
 
     script_path = os.path.abspath(__file__)
@@ -289,8 +283,8 @@ def main(args):
         print(f"  Repo: {model_name}, LoRA: {use_lora}")
         print("=" * 80)
 
-        # Alternate config order per model to avoid systematic bias
-        configs = CONFIGS if mi % 2 == 0 else list(reversed(CONFIGS))
+        # Use auto-detected configs
+        configs = configs_to_run
         model_results = {}
 
         for label, use_cce in configs:
@@ -347,28 +341,27 @@ def main(args):
     # =========================================================================
     print(f"\n\n{'='*80}")
     print("FINAL SUMMARY — Baseline+compile vs CCE+compile (GC=ON, compile=ON)")
+    has_fast_cce = _check_mlx_cce()
+    variant_name = "mlx-cce" if has_fast_cce else "mlx"
+    
     print("=" * 80)
-    print(f"{ 'Model':<22} {'BL+compile':>14} {'CCE+compile':>14} {'Speedup':>8} {'MemSave':>8}")
+    print(f"{'Model':<22} {'ms/step':>10} {'Peak GB':>10} {'Variant':>12}")
     print("-" * 80)
 
     for display_name, model_results in all_results:
-        bl = model_results.get("Baseline+compile")
-        cce = model_results.get("CCE+compile")
-
-        if not bl:
-            print(f"{display_name:<22} {'FAILED':>14}")
-            continue
-        if not cce:
-            print(f"{display_name:<22} {bl[0]:>7.0f}ms {bl[1]:>5.1f}GB {'FAILED':>14}")
-            continue
-
-        speedup = bl[0] / cce[0] if cce[0] > 0 else 0
-        mem_save = (bl[1] - cce[1]) / bl[1] * 100 if bl[1] > 0 else 0
-        print(
-            f"{display_name:<22} "
-            f"{bl[0]:>7.0f}ms {bl[1]:>5.1f}GB "
-            f"{cce[0]:>7.0f}ms {cce[1]:>5.1f}GB "
-            f"{speedup:>7.2f}x {mem_save:>7.1f}%")
+        # Show results for whichever config was run
+        result = None
+        label = None
+        for lbl in ["CCE+compile", "Baseline+compile"]:
+            if model_results.get(lbl):
+                result = model_results[lbl]
+                label = lbl
+                break
+        
+        if not result:
+            print(f"{display_name:<22} {'FAILED':>10}")
+        else:
+            print(f"{display_name:<22} {result[0]:>10.0f}ms {result[1]:>10.1f}GB {variant_name:>12}")
 
     print("=" * 80)
     print("Done!")
