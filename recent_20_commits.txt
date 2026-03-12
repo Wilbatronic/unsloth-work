@@ -1,0 +1,20 @@
+﻿d0a85b15 | 2026-03-12 | Add --auto flag to run both mlx and mlx-cce benchmarks
+ea968740 | 2026-03-10 | Add mlx-cce suffix to W&B run names for comparison
+2dcde825 | 2026-03-10 | Fix benchmark to properly compare baseline vs CCE with mlx-cce
+0b58ebea | 2026-03-10 | Auto-enable CCE when mx.fast.cce_loss is available
+099952ce | 2026-03-04 | Remove memory-heavy models: Gemma2-2B (26GB) and Llama-3.1-8B (28GB) for 24GB limit
+fbcc7dfd | 2026-03-04 | Update benchmark to run 100 steps (5 warmup + 95 measure)
+79df54ba | 2026-03-04 | Fix: use optimizer.update(grads, params) instead of optimizer(grads, params) for MLX optimizers
+0589babf | 2026-03-04 | Fix: reshape to q_size not hidden_size in MLXAttention for custom head_dim
+5e4f26ee | 2026-03-04 | Fix: pure MLX training path for 4-bit quantized models on Apple Silicon (MPS)
+fa228457 | 2026-03-04 | Fix: make tensor contiguous before moving to MPS in MLXTrainer to prevent Placeholder storage allocation error
+f20d1779 | 2026-03-04 | Fix: avoid AttributeError during MLP and Attention patching when using models with fused projections (e.g., Phi-3)
+c3021d17 | 2026-03-04 | Fix: add PyTorch fallback support to MLXTrainer to enable training FastLanguageModel with MLX native optimizers
+9d2e420c | 2026-03-04 | Fix: prevent prepare_model_for_kbit_training from returning None
+00211462 | 2026-03-04 | Fix: add phi3 support to patch_peft_model in llama.py
+64e03ebd | 2026-03-03 | Fix: use native MLX trainer in benchmark to enable actual training on Apple Silicon
+17e6c84b | 2026-03-03 | Fix: MockModule UnboundLocalError and return real lists for trainer metrics
+cc383362 | 2026-03-03 | Fix: add load_in_8bit and load_in_16bit to FastLlamaModel.from_pretrained signature
+38fee78b | 2026-03-03 | Fix: use AutoModel.from_config on MPS in vision.py (FastBaseModel) to skip Hub weight loading
+c8f30a8b | 2026-03-03 | Fix: use AutoModelForCausalLM.from_config on MPS to skip Hub weight loading for quantized models
+77e7155d | 2026-03-03 | Fix: MockModule metrics and MPS meta-loading for MLX-native models

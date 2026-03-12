@@ -253,6 +253,23 @@ def run_subprocess(cmd):
 
 
 def main(args):
+    # Auto-detect mlx variant and set configs accordingly
+    try:
+        import mlx.core as mx
+        has_fast_cce = hasattr(mx, "fast") and hasattr(mx.fast, "cce_loss")
+    except ImportError:
+        has_fast_cce = False
+    
+    global CONFIGS
+    if has_fast_cce:
+        # mlx-cce installed: CCE is always on by default, only run CCE config
+        print("Detected: mlx-cce installed (CCE enabled by default)")
+        CONFIGS = [("CCE+compile", True)]
+    else:
+        # Regular mlx: run baseline (CCE won't be available)
+        print("Detected: regular mlx (CCE not available)")
+        CONFIGS = [("Baseline+compile", False)]
+    
     print("=" * 80)
     print("Unsloth MLX Benchmark: Baseline+compile vs CCE+compile")
     print("  Gradient Checkpointing: ON | Compile: ON | Isolation: subprocess")
@@ -394,21 +411,22 @@ if __name__ == "__main__":
         if install_cce:
             cmds.append("pip install mlx-cce")
         
-        # Run benchmark
-        cmd = [sys.executable, __file__, "--wandb"]
-        if not args.wandb:
-            cmd.remove("--wandb")
+        for c in cmds:
+            print(f"Running: {c}")
+            result = subprocess.run(c, shell=True, capture_output=True, text=True)
+            if result.returncode != 0:
+                print(f"Warning: {c} failed: {result.stderr}")
+            print(result.stdout)
         
-        if cmds:
-            for c in cmds:
-                print(f"Running: {c}")
-                result = subprocess.run(c, shell=True, capture_output=True, text=True)
-                if result.returncode != 0:
-                    print(f"Warning: {c} failed: {result.stderr}")
+        # Verify which mlx is now installed
+        verify_cmd = 'python -c "import mlx.core as mx; print(\"Has CCE:\", hasattr(mx, \\"fast\\") and hasattr(mx.fast, \\"cce_loss\\"))"'
+        result = subprocess.run(verify_cmd, shell=True, capture_output=True, text=True)
+        print(f"Verification: {result.stdout.strip()}")
         
-        # Run the benchmark
-        print(f"Running: {' '.join(cmd)}")
-        result = subprocess.run(cmd, text=True)
+        # Run benchmark with fresh Python process
+        cmd = f"{sys.executable} {__file__} --wandb"
+        print(f"Running: {cmd}")
+        result = subprocess.run(cmd, shell=True, text=True)
         return result.returncode
 
     if args.auto:
