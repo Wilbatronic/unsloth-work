@@ -31,7 +31,7 @@ MODELS = [
     ("mlx-community/Qwen2.5-3B-Instruct-8bit", "Qwen2.5-3B-8bit", True),
     ("mlx-community/Llama-3.2-3B-Instruct-bf16", "Llama-3B-LoRA", True),
     # --- Large (7-9B) ---
-    ("mlx-community/Mistral-7B-Instruct-v0.3-4bit", "Mistral-7B-4bit", True),
+    # ("mlx-community/Mistral-7B-Instruct-v0.3-4bit", "Mistral-7B-4bit", True),  # Disabled - too big
 ]
 
 # (label, use_cce)  — all use compile=True, gradient_checkpointing=True
@@ -359,6 +359,9 @@ def main(args):
 
 if __name__ == "__main__":
     import argparse
+    import subprocess
+    import sys
+    
     parser = argparse.ArgumentParser(allow_abbrev=False)
     parser.add_argument("--worker", action="store_true")
     parser.add_argument("--model", type=str)
@@ -368,9 +371,82 @@ if __name__ == "__main__":
     parser.add_argument("--wandb_project", type=str, default=None)
     parser.add_argument("--wandb", action="store_true")
     parser.add_argument("--project", type=str, default="unsloth-mlx-benchmark")
+    parser.add_argument("--auto", action="store_true", help="Auto-run both regular mlx and mlx-cce benchmarks")
     args = parser.parse_args()
 
-    if args.worker:
+    def is_mlx_cce_installed():
+        """Check if mlx-cce is installed (has mx.fast.cce_loss)"""
+        try:
+            import mlx.core as mx
+            return hasattr(mx, "fast") and hasattr(mx.fast, "cce_loss")
+        except ImportError:
+            return False
+
+    def run_benchmark_with_mlx(mlx_variant, uninstall_cce=False, install_cce=False):
+        """Run benchmark with specific mlx variant"""
+        print(f"\n{'='*80}")
+        print(f"Running benchmark with: {mlx_variant}")
+        print(f"{'='*80}\n")
+        
+        cmds = []
+        if uninstall_cce:
+            cmds.append("pip uninstall mlx-cce mlx-cce-metal -y")
+        if install_cce:
+            cmds.append("pip install mlx-cce")
+        
+        # Run benchmark
+        cmd = [sys.executable, __file__, "--wandb"]
+        if not args.wandb:
+            cmd.remove("--wandb")
+        
+        if cmds:
+            for c in cmds:
+                print(f"Running: {c}")
+                result = subprocess.run(c, shell=True, capture_output=True, text=True)
+                if result.returncode != 0:
+                    print(f"Warning: {c} failed: {result.stderr}")
+        
+        # Run the benchmark
+        print(f"Running: {' '.join(cmd)}")
+        result = subprocess.run(cmd, text=True)
+        return result.returncode
+
+    if args.auto:
+        # Auto-run both regular mlx and mlx-cce
+        has_cce = is_mlx_cce_installed()
+        
+        if has_cce:
+            print("mlx-cce is currently installed")
+            # Run with regular mlx first (uninstall cce)
+            print("\n" + "="*80)
+            print("STEP 1: Running benchmark with REGULAR mlx (no CCE)")
+            print("="*80)
+            run_benchmark_with_mlx("regular mlx", uninstall_cce=True)
+            
+            # Run with mlx-cce
+            print("\n" + "="*80)
+            print("STEP 2: Running benchmark with mlx-cce (with CCE)")
+            print("="*80)
+            run_benchmark_with_mlx("mlx-cce", install_cce=True)
+        else:
+            print("mlx-cce is NOT installed")
+            # Run with regular mlx first
+            print("\n" + "="*80)
+            print("STEP 1: Running benchmark with REGULAR mlx (no CCE)")
+            print("="*80)
+            run_benchmark_with_mlx("regular mlx")
+            
+            # Run with mlx-cce
+            print("\n" + "="*80)
+            print("STEP 2: Running benchmark with mlx-cce (with CCE)")
+            print("="*80)
+            run_benchmark_with_mlx("mlx-cce", install_cce=True)
+        
+        print("\n" + "="*80)
+        print("AUTO-BENCHMARK COMPLETE!")
+        print("View results at: https://wandb.ai/minimaml/unsloth-mlx-benchmark")
+        print("="*80)
+    elif args.worker:
         run_worker(args.model, args.display_name, bool(args.use_lora), bool(args.use_cce), args.wandb_project)
     else:
         main(args)
