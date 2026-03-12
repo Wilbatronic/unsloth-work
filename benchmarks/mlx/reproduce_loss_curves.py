@@ -401,6 +401,7 @@ if __name__ == "__main__":
         cmds = []
         if uninstall_cce:
             cmds.append("pip uninstall mlx-cce mlx-cce-metal -y")
+            cmds.append("pip install mlx --upgrade")  # Reinstall regular mlx
         if install_cce:
             cmds.append("pip install mlx-cce")
         
